@@ -318,8 +318,9 @@ caused by previous runs.
 By default, each pod failure is counted towards the `.spec.backoffLimit` limit,
 see [pod backoff failure policy](#pod-backoff-failure-policy). However, you can
 customize handling of pod failures by setting the Job's [pod failure policy](#pod-failure-policy).
+
 Additionally, you can choose to count the pod failures independently for each
-index of an Indexed Job by setting the `.spec.backoffLimitPerIndex` field
+index of an [Indexed](#completion-mode) Job by setting the `.spec.backoffLimitPerIndex` field
 (see [backoff limit per index](#backoff-limit-per-index)).
 
 Note that even if you specify `.spec.parallelism = 1` and `.spec.completions = 1` and
@@ -373,31 +374,65 @@ from failed Jobs is not lost inadvertently.
 {{< note >}}
 You can only configure the backoff limit per index for a Job, if you
 have the `JobBackoffLimitPerIndex` [feature gate](/docs/reference/command-line-tools-reference/feature-gates/)
-enabled in your cluster. This feature is only available for Indexed Jobs, which
+enabled in your cluster. A per-index backoff limit is only available for Indexed Jobs that
 use the `restartPolicy: Never`.
 {{< /note >}}
 
-When you run an Indexed Job, you may want to handle pod failures for different
-indexes as counted independently. To do so, set the `.spec.backoffLimitPerIndex`
-to specify the the maximal number of pod failures per index. When the number is
-exceeded for an index, the index is marked as failed in the
-`.status.failedIndexes` field. Note that, a failing index does not interrupt
-execution of other indexes. You can additionally limit the maximal number of
-indexes marked failed by setting the `.spec.maxFailedIndexes` field. In that case,
-the the number of failed indexes is exceeded, then the entire Job is marked
-failed and execution all pods and indexed is terminated.
+When you run an [indexed](#completion-mode) Job, you can choose to handle retries
+for pod failures independently for each index. To do so, set the
+`.spec.backoffLimitPerIndex` to specify the the maximal number of pod failures
+per index.
 
-When all indexes finishes for a Job using this feature, and there is at least
-one failed index, then the entire Job is marked as failed, even if some indexes
-are finished successfully.
+When the per-index backoff limit is exceeded for an index, Kuberentes considers the index as failed and adds it to the
+`.status.failedIndexes` field. The succeeded indexes, those with a successfully
+executed pods, are recorded in the `.status.completedIndexes` field, regardless of whether you set
+the `backoffLimitPerIndex` field.
 
-Here is a manifest for an Indexed Job that defines a `backoffLimitPerIndex`:
+Note that a failing index does not interrupt execution of other indexes.
+You can additionally limit the maximal number of indexes marked failed by
+setting the `.spec.maxFailedIndexes` field.
+When the number of failed indexes exceeds the `maxFailedIndexes` field, the
+entire Job is marked failed by the Job controller, by setting the Failed
+condition in the Job status. This triggers termination of all running Pods for
+that Job.
+
+Once all indexes finish for a Job where you specified a backoff limit per index,
+if at least one of those indexes did fail, the Job controller marks the overall
+Job as failed, by setting the Failed condition in the status. The Job gets
+marked as failed even if some, potentially nearly all, of the indexes were
+processed successfully.
+
+Here is an example manifest for a Job that defines a `backoffLimitPerIndex`:
 
 {{< codenew file="/controllers/job-backoff-limit-per-index-example.yaml" >}}
 
 In the example above, the Job controller will allow for one restart for each
 of the indexes. When the total number of failed indexes exceeds 5, then
 the entire Job is terminated.
+
+Once the job is finished, the the Job status will look as follows:
+
+```sh
+kubectl get -o yaml job job-backoff-limit-per-index-example
+```
+
+```yaml
+  status:
+    completedIndexes: 1,3,5,7,9
+    failedIndexes: 0,2,4,6,8
+    succeeded: 5          # 1 succeeded pod for each of 5 succeeded indexes
+    failed: 10            # 2 failed pods (1 retry) for each of 5 failed indexes
+    conditions:
+    - message: Job has failed indexes
+      reason: FailedIndexes
+      status: "True"
+      type: Failed
+```
+
+Additionally, you may want to use the per-index backoff along with the
+custom [pod failure policy](#pod-failure-policy). In particular, when using
+per-index backoff there is a new `FailIndex` action available which allows you to
+avoid unnecessary retries within an index.
 
 ### Pod failure policy {#pod-failure-policy}
 
@@ -481,6 +516,8 @@ These are some requirements and semantics of the API:
      should not be incremented and a replacement Pod should be created.
   - `Count`: use to indicate that the Pod should be handled in the default way.
      The counter towards the `.spec.backoffLimit` should be incremented.
+  - `FailIndex`: use this action along with [backoff limit per index](#backoff-limit-per-index)
+     to avoid unnecessary retries within the index with a failed pod.
 
 {{< note >}}
 When you use a `podFailurePolicy`, the job controller only matches Pods in the
@@ -953,3 +990,5 @@ object, but maintains complete control over what Pods are created and how work i
   the UNIX tool `cron`.
 * Practice how to configure handling of retriable and non-retriable pod failures
   using `podFailurePolicy`, based on the step-by-step [examples](/docs/tasks/job/pod-failure-policy/).
+* Practice how to configure your Jobs to handle pod failures independently per
+  index using `backoffLimitPerIndex`, based on the step-by-step [examples](/docs/tasks/job/handling-pod-failures-per-index/).
