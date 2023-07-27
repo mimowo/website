@@ -1,0 +1,24 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-backoff-limit-per-index-execute-all
+spec:
+  completions: 8
+  parallelism: 2
+  completionMode: Indexed
+  backoffLimitPerIndex: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: example
+        image: python
+        command:
+        - python3
+        - -c
+        - |
+          import os, sys, time
+          id = int(os.environ.get("JOB_COMPLETION_INDEX"))
+          if id == 1 or id == 2:
+            sys.exit(1)
+          time.sleep(1)
